@@ -1,11 +1,119 @@
 import flet as ft
 from pathlib import Path
+from pydantic import BaseModel
+import requests
 import pytube as yt
 import re
 import os
 
 BASE_DIR = Path(__file__).parent
 CARPETA_DESCARGAS = Path(Path.home() / 'Downloads').resolve()
+
+def reemplazar_o_agregar(lista, valor_a_reemplazar, nuevo_valor):
+    if valor_a_reemplazar in lista:
+        # Encontrar el índice y reemplazar
+        indice = lista.index(valor_a_reemplazar)
+        lista[indice] = nuevo_valor
+    else:
+        # Agregar el nuevo valor al final de la lista
+        lista.append(nuevo_valor)
+    return lista
+
+class UserToken(BaseModel):
+    tokenList:list = []
+    token:str|None = None
+
+    def token_exist(self):
+        for token_i in self.tokenList:
+            if token_i.token == self.token:
+                return True
+        return False
+
+    def save(self):
+        reemplazar_o_agregar(self.tokenList,0,self)
+
+
+
+class AuthorizationToken(BaseModel):
+    credentials:list = []
+    access:str|None = None
+    refresh:str|None = None
+    def refresh_credentials(self):
+        try:
+            responce = requests.post(
+                'http://127.0.0.1:8000/api/token/refresh/app/',
+                json={
+                    "refresh":self.refresh
+                }
+            )
+            if responce.status_code == 200:
+                serialized = dict(responce.json())
+                self.access = serialized['access']
+                self.refresh = serialized['refresh']
+                
+        except Exception as err:
+            print(f'Error al usar refresh:{err}')
+
+    def save(self):
+        reemplazar_o_agregar(self.credentials,0,self)
+
+
+class UserData(BaseModel):
+    userList:list = []
+    id:int
+    username:str
+    email:str
+    img_user:str
+
+    def save(self):
+        reemplazar_o_agregar(self.userList,0,self)
+
+
+def get_user_data(access:str,refresh:str,id:int):
+    try:
+        responce = requests.get(
+            f'http://127.0.0.1:8000/api/users/{id}',
+            headers={
+                'Authorization':f'Bearer {access}'
+            }
+        )
+        if responce.status_code == 200:
+            serialized = dict(responce.json())
+            user = UserData(id=serialized['id'], username=serialized['username'], email=serialized['email'],
+                            img_user=serialized['img_user'])
+            user.save()
+
+            return user.userList[0]
+
+    except Exception as err:
+        print(f'Error: {err}')
+
+def login(e,token:str):
+    token_user = UserToken(token=token)
+    try:
+        responce = requests.post(
+            'http://127.0.0.1:8000/api/login/',
+            json={
+                'token':token
+            }
+        )
+        if responce.status_code == 200:
+            if not token_user.token_exist():
+                token_user.save()
+                print('Enlistado')
+            else:
+                print('Ya existe')
+            serialized = dict(responce.json())
+            tokens = AuthorizationToken(access=serialized['access'],refresh=serialized['refresh'])
+            tokens.save()
+            user = get_user_data(access=tokens.access,id=serialized['id'],refresh=tokens.refresh)
+            print(user)
+
+
+    except Exception as err:
+        print(f'Error responce: {err}')
+
+
 
 def clean_name(name):
     caracteres_especiales = r'|/\\\"?<>'
@@ -26,7 +134,30 @@ async def toggle_visibility(e, urlObjet: ft.TextField, page: ft.Page) -> None:
 
 path_user:str = ''
 
-text_path = ft.Text(f'La carpeta por defecto es\n{CARPETA_DESCARGAS}')
+userTokenInput = ft.TextField(
+                            text_size=20,
+                            autofocus=True,
+                            width=250,
+                            bgcolor='#d7e3ff',
+                            color='#001b3f'
+                        )
+
+text_path = ft.Container(
+    content=ft.Column(
+        controls=[
+            ft.Row(
+                controls=[
+                    ft.Text(f'La carpeta seleccionada es:',color='#fdfbff')
+                ]
+            ),
+            ft.Row(
+                controls=[
+                    ft.Text(f'{CARPETA_DESCARGAS}',size=20)
+                ]
+            )
+        ]
+    )
+)
 
 progres_text = ft.Text(
     '0%',
@@ -38,7 +169,7 @@ progres_bar = ft.ProgressBar(
     visible=False
 )
 
-title_video = ft.Text('Title:')
+title_video = ft.Text('Title:',size=15)
 
 img_video = ft.Image(
         src=f"https://www.golpumptechnology.com/wp-content/uploads/2023/05/Imagen_por_defecto.webp",
@@ -53,10 +184,10 @@ info_banner = ft.Banner(open=False,content=ft.Text(''))
 
 button_style = ft.ButtonStyle(
         color={
-                    ft.MaterialState.HOVERED: ft.colors.WHITE,
-                    ft.MaterialState.FOCUSED: ft.colors.BLUE,
-                    ft.MaterialState.DEFAULT: ft.colors.BLACK,
-                },
+            ft.MaterialState.HOVERED: ft.colors.WHITE,
+            ft.MaterialState.FOCUSED: ft.colors.BLUE,
+            ft.MaterialState.DEFAULT: ft.colors.BLACK,
+        },
         overlay_color="#00796B",
         elevation=2,
         padding=10,
@@ -90,7 +221,7 @@ async def main(page: ft.Page) -> None:
     async def print_path(e: ft.FilePickerResultEvent):
         global path_user
         path_user = e.path
-        text_path.value = e.path
+        text_path.content.controls[1].controls[0].value = e.path
         page.update()
         print(f'Carpetas seleccionadas: {path_user}')
 
@@ -106,7 +237,7 @@ async def main(page: ft.Page) -> None:
 
     file_picker = ft.FilePicker(on_result=print_path)
     page.window_width = 800
-    page.window_height = 600
+    page.window_height = 700
     page.window_resizable = False
     page.theme_mode = ft.ThemeMode.SYSTEM
     page.overlay.append(file_picker)
@@ -263,7 +394,7 @@ async def main(page: ft.Page) -> None:
             info_banner.actions = [
                 ft.ElevatedButton(
                     'Cerrar',
-                    on_click=lambda e:close_object(e, info_banner)
+                    on_click=lambda e:close_object(e)
                 )
             ]
             page.update()
@@ -310,7 +441,9 @@ async def main(page: ft.Page) -> None:
                     ft.ElevatedButton(
                         'Descargar',
                         icon=ft.icons.DOWNLOAD,
-                        on_click=Descargar_video_
+                        on_click=Descargar_video_,
+                        bgcolor='#fdfbff',
+                        color='#035ebc'
                     )
                 ],
                 alignment=ft.MainAxisAlignment.CENTER
@@ -362,10 +495,50 @@ async def main(page: ft.Page) -> None:
                     alignment=ft.MainAxisAlignment.CENTER
                 )
             ]
+        ),
+        visible = False
+    )
+
+    login_app = ft.Container(
+        content=ft.Column(
+            controls=[
+                ft.Row(
+                    controls=[
+                        ft.Text(
+                            'Ingrese su token de Seguridad:',
+                            size=20
+                        )
+                    ]
+                ),
+                ft.Row(
+                    controls=[
+                        userTokenInput
+                    ]
+                ),
+                ft.Row(
+                    controls=[
+                        ft.ElevatedButton(
+                            'Enviar',
+                            on_click=lambda e: login(e,userTokenInput.value)
+                        )
+                    ]
+                )
+            ],
+            alignment=ft.MainAxisAlignment.CENTER
+        ),
+        visible=True
+    )
+
+    app = ft.Container(
+        content=ft.Stack(
+            controls=[
+                content,
+                login_app
+            ]
         )
     )
 
-    page.add(content)
+    page.add(app)
 
 if __name__ == '__main__':
     ft.app(target=main,upload_dir=Path(BASE_DIR / 'uploads') if path_user is None or '' or not isinstance(path_user,str) else path_user)
