@@ -8,34 +8,31 @@ import os
 
 BASE_DIR = Path(__file__).parent
 CARPETA_DESCARGAS = Path(Path.home() / 'Downloads').resolve()
+URL_BASE = r'http://127.0.0.1:8000'
 
 def reemplazar_o_agregar(lista, valor_a_reemplazar, nuevo_valor):
     if valor_a_reemplazar in lista:
-        # Encontrar el índice y reemplazar
         indice = lista.index(valor_a_reemplazar)
         lista[indice] = nuevo_valor
     else:
-        # Agregar el nuevo valor al final de la lista
         lista.append(nuevo_valor)
     return lista
 
 class UserToken(BaseModel):
-    tokenList:list = []
     token:str|None = None
 
     def token_exist(self):
-        for token_i in self.tokenList:
+        for token_i in tokenList:
             if token_i.token == self.token:
                 return True
         return False
 
     def save(self):
-        reemplazar_o_agregar(self.tokenList,0,self)
+        reemplazar_o_agregar(tokenList,0,self)
 
 
 
 class AuthorizationToken(BaseModel):
-    credentials:list = []
     access:str|None = None
     refresh:str|None = None
     def refresh_credentials(self):
@@ -50,24 +47,30 @@ class AuthorizationToken(BaseModel):
                 serialized = dict(responce.json())
                 self.access = serialized['access']
                 self.refresh = serialized['refresh']
+                self.save()
                 
         except Exception as err:
             print(f'Error al usar refresh:{err}')
 
     def save(self):
-        reemplazar_o_agregar(self.credentials,0,self)
+        reemplazar_o_agregar(credentials,0,self)
 
 
 class UserData(BaseModel):
-    userList:list = []
     id:int
     username:str
     email:str
     img_user:str
 
     def save(self):
-        reemplazar_o_agregar(self.userList,0,self)
+        reemplazar_o_agregar(userList,0,self)
 
+    def get_user_list(self):
+        return [user for user in userList]
+
+userList:list[UserData] = []
+tokenList:list[UserToken] = []
+credentials:list[AuthorizationToken] = []
 
 def get_user_data(access:str,refresh:str,id:int):
     try:
@@ -83,36 +86,10 @@ def get_user_data(access:str,refresh:str,id:int):
                             img_user=serialized['img_user'])
             user.save()
 
-            return user.userList[0]
+            return userList[0]
 
     except Exception as err:
         print(f'Error: {err}')
-
-def login(e,token:str):
-    token_user = UserToken(token=token)
-    try:
-        responce = requests.post(
-            'http://127.0.0.1:8000/api/login/',
-            json={
-                'token':token
-            }
-        )
-        if responce.status_code == 200:
-            if not token_user.token_exist():
-                token_user.save()
-                print('Enlistado')
-            else:
-                print('Ya existe')
-            serialized = dict(responce.json())
-            tokens = AuthorizationToken(access=serialized['access'],refresh=serialized['refresh'])
-            tokens.save()
-            user = get_user_data(access=tokens.access,id=serialized['id'],refresh=tokens.refresh)
-            print(user)
-
-
-    except Exception as err:
-        print(f'Error responce: {err}')
-
 
 
 def clean_name(name):
@@ -128,7 +105,7 @@ def clean_name(name):
 async def toggle_visibility(e, urlObjet: ft.TextField, page: ft.Page) -> None:
     try:
         urlObjet.visible = not urlObjet.visible
-        await page.update_async()
+        page.update()
     except Exception as err:
         print(f'Toggle visibility Error: {err}')
 
@@ -171,6 +148,11 @@ progres_bar = ft.ProgressBar(
 
 title_video = ft.Text('Title:',size=15)
 
+img_user = ft.CircleAvatar(
+    foreground_image_url='',
+    content=ft.Text("FF")
+)
+
 img_video = ft.Image(
         src=f"https://www.golpumptechnology.com/wp-content/uploads/2023/05/Imagen_por_defecto.webp",
         width=300,
@@ -196,6 +178,41 @@ button_style = ft.ButtonStyle(
 
 async def main(page: ft.Page) -> None:
     global path_user
+
+    def login(e, token: str):
+        token_user = UserToken(token=token)
+        try:
+            responce = requests.post(
+                'http://127.0.0.1:8000/api/login/',
+                json={
+                    'token': token
+                }
+            )
+            if responce.status_code == 200:
+                if not token_user.token_exist():
+                    token_user.save()
+                    print('Enlistado')
+                else:
+                    print('Ya existe')
+                serialized = dict(responce.json())
+                tokens = AuthorizationToken(access=serialized['access'], refresh=serialized['refresh'])
+                tokens.save()
+                user = get_user_data(access=tokens.access, id=serialized['id'], refresh=tokens.refresh)
+                login_app.visible = False
+                content.visible = True
+                img_user.foreground_image_url = ''.join([URL_BASE,[user for user in userList][0].img_user])
+                page.appbar.leading = ft.Row(
+                    controls=[
+                        img_user,
+                        ft.Text(userList[0].username)
+                    ]
+                )
+                print(img_user.foreground_image_url)
+                page.update()
+                print(user)
+
+        except Exception as err:
+            print(f'Error responce: {err}')
 
     def close_object(e):
         info_banner.open = False
@@ -243,6 +260,7 @@ async def main(page: ft.Page) -> None:
     page.overlay.append(file_picker)
     page.banner = info_banner
     page.appbar = ft.AppBar(
+        leading='',
         title=ft.Text(
             'Descargar Videos',
             color='#009485'
@@ -283,7 +301,7 @@ async def main(page: ft.Page) -> None:
             img_video.src = audio_data.thumbnail_url
             page.update()
             audio = audio_data.streams.filter(only_audio=True).first()
-            if path_user is not None or '' or not isinstance(path_user,str):
+            if path_user and isinstance(path_user,str):
                 audio = audio.download(
                     output_path=path_user,
                     filename_prefix='Audio descargado_',
@@ -339,8 +357,8 @@ async def main(page: ft.Page) -> None:
             img_video.src = video.thumbnail_url
             page.update()
             stream = video.streams.get_highest_resolution()
-            if path_user is not None or '' or not isinstance(path_user, str):
-                video = stream.download(
+            if path_user and isinstance(path_user, str):
+                video_down = stream.download(
                     output_path=path_user,
                     filename_prefix='Video descargado_',
                     filename=clean_name(video.title),
@@ -348,8 +366,8 @@ async def main(page: ft.Page) -> None:
                     skip_existing=False,
                     timeout=500
                 )
-                paths,_ = os.path.splitext(video)
-                os.rename(video,paths + '.mp4')
+                paths,_ = os.path.splitext(video_down)
+                os.rename(video_down,paths + '.mp4')
                 url.value = ''
                 info_banner.open = True
                 info_banner.content = ft.Text('Descarga finalizada')
@@ -362,8 +380,17 @@ async def main(page: ft.Page) -> None:
                 ]
                 icon_status.name = ft.icons.DOWNLOAD_DONE
                 page.update()
+                with requests.Session() as session:
+                    session.headers.update({'Authorization': f'Bearer {credentials[0].access}'})
+                    response = session.post(
+                        'http://127.0.0.1:8000/api/videos/',
+                        json={"titulo": video.title, "usuario": userList[0].id}
+                    )
+                    if response.status_code == 200:
+                        serializer = dict(response.json())
+                        print(serializer)
             else:
-                video = stream.download(
+                video_down = stream.download(
                     output_path=CARPETA_DESCARGAS,
                     filename_prefix='Video descargado_',
                     filename=clean_name(video.title),
@@ -371,8 +398,8 @@ async def main(page: ft.Page) -> None:
                     skip_existing=False,
                     timeout=500
                 )
-                paths, _ = os.path.splitext(video)
-                os.rename(video, paths + '.mp4')
+                paths, _ = os.path.splitext(video_down)
+                os.rename(video_down, paths + '.mp4')
                 url.value = ''
                 info_banner.open = True
                 info_banner.content = ft.Text('Descarga finalizada')
@@ -385,6 +412,15 @@ async def main(page: ft.Page) -> None:
                 ]
                 icon_status.name = ft.icons.DOWNLOAD_DONE
                 page.update()
+                with requests.Session() as session:
+                    session.headers.update({'Authorization': f'Bearer {credentials[0].access}'})
+                    response = session.post(
+                        'http://127.0.0.1:8000/api/videos/',
+                        json={"titulo": video.title, "usuario": userList[0].id}
+                    )
+                    if response.status_code == 200:
+                        serializer = dict(response.json())
+                        print(serializer)
         except Exception as err:
             print(f'Error descarga: {err}')
             icon_status.name = ft.icons.ALARM
